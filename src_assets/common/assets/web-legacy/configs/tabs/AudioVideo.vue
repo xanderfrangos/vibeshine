@@ -477,6 +477,38 @@ function selectVirtualDisplayLayout(v: unknown) {
                   </span>
                 </div>
               </n-checkbox>
+              <div class="mt-4 space-y-4">
+                <n-checkbox v-model:checked="config.app_remote_input">
+                  <div class="flex flex-col">
+                    <span class="text-sm font-medium">
+                      {{ $t('config.app_remote_input') }}
+                    </span>
+                    <span class="mt-1 text-[11px] leading-snug opacity-70">
+                      {{ $t('config.app_remote_input_desc') }}
+                    </span>
+                  </div>
+                </n-checkbox>
+                <n-checkbox v-model:checked="config.app_remote_monitor">
+                  <div class="flex flex-col">
+                    <span class="text-sm font-medium">
+                      {{ $t('config.app_remote_monitor') }}
+                    </span>
+                    <span class="mt-1 text-[11px] leading-snug opacity-70">
+                      {{ $t('config.app_remote_monitor_desc') }}
+                    </span>
+                  </div>
+                </n-checkbox>
+                <n-checkbox v-model:checked="config.app_resume_terminate">
+                  <div class="flex flex-col">
+                    <span class="text-sm font-medium">
+                      {{ $t('config.app_resume_terminate') }}
+                    </span>
+                    <span class="mt-1 text-[11px] leading-snug opacity-70">
+                      {{ $t('config.app_resume_terminate_desc') }}
+                    </span>
+                  </div>
+                </n-checkbox>
+              </div>
             </div>
 
             <PlatformLayout>
@@ -523,7 +555,10 @@ function selectVirtualDisplayLayout(v: unknown) {
                         </span>
                       </div>
                     </n-checkbox>
-                    <n-checkbox v-model:checked="config.remote_monitor_terminate_on_first_request">
+                    <n-checkbox
+                      v-if="config.app_resume_terminate !== false"
+                      v-model:checked="config.remote_monitor_terminate_on_first_request"
+                    >
                       <div class="flex flex-col">
                         <span class="text-sm font-medium">
                           {{ $t('config.remote_monitor_terminate_on_first_request') }}

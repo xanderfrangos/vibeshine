@@ -107,6 +107,60 @@ TEST(RemoteSession, CatalogueProjectionMatchesCallerOwnershipMatrix) {
   EXPECT_EQ(game_owner_monitor.catalogue[1].id, remote_session::disconnect_monitor_id);
 }
 
+TEST(RemoteSession, CatalogueOptionsHideEachInjectedControl) {
+  const std::vector<remote_session::app_t> configured {{1, "one", "One", false}};
+  const auto ids = [](const remote_session::projection_t &projection) {
+    std::vector<std::int32_t> result;
+    for (const auto &app : projection.catalogue) result.push_back(app.id);
+    return result;
+  };
+
+  const remote_session::catalogue_options_t no_remote_sessions {.remote_input = false, .remote_monitor = false};
+  EXPECT_EQ(ids(remote_session::project(caller("other"), {}, {}, configured, false, no_remote_sessions)), std::vector<std::int32_t> {1});
+  EXPECT_EQ(ids(remote_session::project(caller("owner"), game(), {}, configured, false, no_remote_sessions)), std::vector<std::int32_t> {1});
+
+  const auto secondary_without_remote_sessions = remote_session::project(caller("other"), game(), {}, configured, false, no_remote_sessions);
+  EXPECT_TRUE(secondary_without_remote_sessions.free);
+  EXPECT_EQ(ids(secondary_without_remote_sessions), (std::vector<std::int32_t> {remote_session::synthetic_running_game_id(42), remote_session::secondary_resume_id, remote_session::secondary_terminate_id, 1}));
+
+  // A retained monitor must stay reachable and releasable.
+  const auto monitor = remote_session::project(caller("monitor"), {}, {.role = remote_session::role_e::monitor, .retained = true}, configured, true, {.remote_monitor = false, .resume_terminate = false});
+  EXPECT_EQ(ids(monitor), (std::vector<std::int32_t> {remote_session::resume_id, remote_session::disconnect_monitor_id}));
+}
+
+TEST(RemoteSession, LegacySecondaryClientsSeeTheBusyGameWithoutResumeOrTerminate) {
+  const remote_session::catalogue_options_t legacy {.resume_terminate = false};
+  const std::vector<remote_session::app_t> configured {{1, "one", "One", false}, {42, "game", "Running game", false}};
+  const auto observer = remote_session::project(caller("other"), game(), {}, configured, false, legacy);
+  EXPECT_FALSE(observer.free);
+  EXPECT_EQ(observer.current_game, 42);
+  ASSERT_EQ(observer.catalogue.size(), 4);
+  EXPECT_EQ(observer.catalogue[0].id, 1);
+  EXPECT_EQ(observer.catalogue[1].id, 42);
+  EXPECT_EQ(observer.catalogue[2].id, remote_session::input_id);
+  EXPECT_EQ(observer.catalogue[3].id, remote_session::monitor_id);
+
+  EXPECT_FALSE(remote_session::exposes_active_game(caller("other"), game(), {}, false));
+  EXPECT_TRUE(remote_session::exposes_active_game(caller("other"), game(), {}, false, false, true));
+  EXPECT_TRUE(remote_session::exposes_active_game({}, game(), {}, false, false, true));
+  EXPECT_FALSE(remote_session::exposes_active_game({}, {}, {}, false, false, true));
+  // A client attached as Remote Input or Remote Monitor keeps the free view.
+  EXPECT_FALSE(remote_session::exposes_active_game(caller("other"), game(), {.role = remote_session::role_e::input}, true, false, true));
+}
+
+TEST(RemoteSession, TurnedOffControlsAreRefusedExceptRetainedMonitorResume) {
+  using remote_session::control_e;
+  using remote_session::role_e;
+  const remote_session::catalogue_options_t all_off {.remote_input = false, .remote_monitor = false, .resume_terminate = false};
+  for (const auto control : {control_e::input, control_e::monitor, control_e::resume, control_e::running_game, control_e::terminate}) {
+    EXPECT_TRUE(remote_session::control_enabled(control, role_e::none, {}));
+    EXPECT_FALSE(remote_session::control_enabled(control, role_e::none, all_off));
+  }
+  EXPECT_TRUE(remote_session::control_enabled(control_e::resume, role_e::monitor, all_off));
+  EXPECT_TRUE(remote_session::control_enabled(control_e::disconnect_monitor, role_e::monitor, all_off));
+  EXPECT_TRUE(remote_session::control_enabled(control_e::disconnect_input, role_e::input, all_off));
+}
+
 TEST(RemoteSession, InputTileSurvivesTeardownForBothGameOwnersAndSecondaryClients) {
   for (const auto &uuid : {"owner", "secondary"}) {
     for (const bool game_running : {false, true}) {

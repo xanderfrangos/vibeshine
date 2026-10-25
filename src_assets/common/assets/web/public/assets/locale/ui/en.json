@@ -1698,6 +1698,18 @@
           "description": "Reject the first request to replace a running app, then advertise it as resumable for 60 seconds so Moonlight can show its close-app warning. Remote Input and Remote Monitor still attach without that warning. Turn this off to replace apps immediately.",
           "label": "Confirm before replacing a running app"
         },
+        "app_remote_input": {
+          "description": "Add the Remote Input app to Moonlight's app list so a device can control the host without receiving video. Turn this off to hide it; Moonlight tiles cached before the change are refused.",
+          "label": "Show Remote Input"
+        },
+        "app_remote_monitor": {
+          "description": "Add the built-in Remote Monitor app to Moonlight's app list so a device can be used as an extra display. Turn this off to hide it. Remote Monitor profiles you add to your app list yourself are not affected.",
+          "label": "Show Remote Monitor"
+        },
+        "app_resume_terminate": {
+          "description": "While one device is streaming a game, show other devices a Resume app, a copy of the running game at the top of their list, and a Terminate app that closes the game but keeps Remote Input and Remote Monitor connected. Turn this off to bring back Moonlight's own Resume and Quit buttons on the running game, as before Vibeshine 1.19. Launching Remote Input or Remote Monitor from those devices while a game runs then asks to quit the game first.",
+          "label": "Show Resume and Terminate for other devices"
+        },
         "capture": {
           "description": "Automatic uses KMS for managed virtual screens on Linux for maximum compatibility and low latency. Explicit capture choices are honored for physical and virtual screens; other methods are not recommended for virtual screens.",
           "label": "Capture method"
@@ -1861,7 +1873,7 @@
           "title": "Virtual display"
         },
         "display_remote_monitor": {
-          "description": "Use a paired device as an additional display. Choose whether it receives audio and when the display is removed.",
+          "description": "Use a paired device as an additional display or controller. Choose which of these apps Moonlight shows, whether Remote Monitor receives audio, and when its display is removed.",
           "title": "Remote Monitor"
         },
         "everyday_access": {
@@ -1909,7 +1921,7 @@
           "title": "Display lifecycle and recovery"
         },
         "everyday_remote_monitor": {
-          "description": "Use a paired device as an additional display. Choose whether it receives audio and when the display is removed.",
+          "description": "Use a paired device as an additional display or controller. Choose which of these apps Moonlight shows, whether Remote Monitor receives audio, and when its display is removed.",
           "title": "Remote Monitor"
         },
         "everyday_smoothness": {

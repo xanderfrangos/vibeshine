@@ -211,6 +211,22 @@ test('Linux exposes Remote Monitor behavior controls', () => {
   }
 });
 
+test('Injected Moonlight apps can each be turned off on every platform', () => {
+  const remoteMonitor = settingsCategories
+    .flatMap((category) => category.groups)
+    .find((group) => group.id === 'display_remote_monitor');
+  assert.ok(remoteMonitor);
+
+  for (const key of ['app_remote_input', 'app_remote_monitor', 'app_resume_terminate']) {
+    const field: SettingsField | undefined = remoteMonitor.fields.find(
+      (candidate) => candidate.key === key,
+    );
+    assert.equal(field?.kind, 'boolean', `${key} must be a toggle`);
+    assert.equal(field?.platform, undefined, `${key} must apply to every platform`);
+    assert.equal(settingsDefaults[key], true, `${key} must keep the app visible by default`);
+  }
+});
+
 test('Everyday keeps impactful stream choices together and detailed tuning in categories', () => {
   const everyday = settingsCategories.find((category) => category.id === 'everyday')!;
   const groups = everyday.groups.filter((group) => matchesPlatform(group, 'linux'));
