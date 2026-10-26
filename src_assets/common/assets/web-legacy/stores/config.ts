@@ -666,6 +666,9 @@ export const useConfigStore = defineStore('config', () => {
       'realtime_stats_show_session_history',
       'rtx_hdr',
       'rtx_hdr_force_sdr',
+      'app_remote_input',
+      'app_remote_monitor',
+      'app_resume_terminate',
     ];
     const allBoolKeys = playniteBoolKeys.concat(otherBoolKeys);
     const toBool = (v: any): boolean | null => {
