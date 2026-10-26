@@ -202,7 +202,9 @@ namespace remote_session {
   ) {
     if (!game.running) return false;
     if (replacement_confirmation_active) return true;
-    return owner.role == role_e::none && (legacy_secondary_clients || owns_game(caller, game));
+    // Moonlight's Quit cannot end the game while remote sessions are active, so
+    // legacy clients fall back to the free view and its Resume/Terminate pair.
+    return owner.role == role_e::none && ((legacy_secondary_clients && !remote_sessions_active) || owns_game(caller, game));
   }
 
   bool allows_normal_game_cancel(const caller_t &caller, const game_t &game, const bool remote_sessions_active) {
@@ -239,7 +241,7 @@ namespace remote_session {
       append_remote_sessions(false);
       return result;
     }
-    if (owns_game(caller, game) || (game.running && !options.resume_terminate)) {
+    if (owns_game(caller, game) || (game.running && !resume_terminate_enabled(options, remote_sessions_active))) {
       // Legacy secondary clients see the real busy game, as its owner does,
       // and resume or quit it through Moonlight's own controls.
       result.free = false;
@@ -315,13 +317,17 @@ namespace remote_session {
     return result;
   }
 
-  bool control_enabled(const control_e control, const role_e owner_role, const catalogue_options_t &options) {
+  bool resume_terminate_enabled(const catalogue_options_t &options, const bool remote_sessions_active) {
+    return options.resume_terminate || remote_sessions_active;
+  }
+
+  bool control_enabled(const control_e control, const role_e owner_role, const catalogue_options_t &options, const bool remote_sessions_active) {
     switch (control) {
       case control_e::input: return options.remote_input;
       case control_e::monitor: return options.remote_monitor;
       case control_e::resume:
-      case control_e::running_game: return options.resume_terminate || owner_role == role_e::monitor;
-      case control_e::terminate: return options.resume_terminate;
+      case control_e::running_game: return resume_terminate_enabled(options, remote_sessions_active) || owner_role == role_e::monitor;
+      case control_e::terminate: return resume_terminate_enabled(options, remote_sessions_active);
       default: return true;
     }
   }

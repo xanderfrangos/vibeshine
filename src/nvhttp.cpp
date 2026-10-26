@@ -4437,11 +4437,12 @@ namespace nvhttp {
         .may_launch = !identity.uuid.empty(),
         .may_terminate = !identity.uuid.empty(),
       };
-      const auto owner = remote_role_gate_snapshot_for_client(identity.uuid).owner;
+      const auto remote_gate = remote_role_gate_snapshot_for_client(identity.uuid);
+      const auto &owner = remote_gate.owner;
       // Configured Monitor profiles are the user's own entries. Only the
       // injected controls follow the app-list options, including cached tiles.
       if (!selected_monitor_profile &&
-          !remote_session::control_enabled(synthetic_control, owner.role, remote_catalogue_options())) {
+          !remote_session::control_enabled(synthetic_control, owner.role, remote_catalogue_options(), remote_gate.active)) {
         tree.put("root.resume", 0);
         tree.put("root.<xmlattr>.status_code", 404);
         tree.put("root.<xmlattr>.status_message", "This app has been turned off on the host");
@@ -4811,9 +4812,7 @@ launch_session->exact_target_hold.reset();
         tree.put("root.<xmlattr>.status_code", 409);
         tree.put(
           "root.<xmlattr>.status_message",
-          config::video.app_resume_terminate ?
-            "Remote Input or Remote Monitor is active; launch Terminate before starting a different app" :
-            "Remote Input or Remote Monitor is active; quit the running app from its own client before starting a different app"
+          "Remote Input or Remote Monitor is active; launch Terminate before starting a different app"
         );
         return;
       }
