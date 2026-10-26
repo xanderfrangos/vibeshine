@@ -24,8 +24,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      release_version: ${{ steps.version.outputs.release_version }}
+    steps:
+      # A "-pr-validation" version makes the MSI refuse to replace an existing
+      # install, so release builds sit one patch above Nonary's latest stable
+      # release instead. That upgrades any installed stable build in place.
+      - name: Resolve release build version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPLICIT_VERSION: ${{ inputs.release_version || vars.RELEASE_BUILD_VERSION }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          version="$EXPLICIT_VERSION"
+          if [[ -z "$version" ]]; then
+            stable="$(gh api repos/Nonary/vibeshine/releases/latest --jq .tag_name)"
+            stable="${stable#v}"
+            if [[ ! "$stable" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              echo "::error::Latest upstream release '$stable' is not a plain major.minor.patch version." >&2
+              exit 1
+            fi
+            next_patch=$((BASH_REMATCH[3] + 1))
+            version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${next_patch}-release.d$(date -u +%Y%m%d).${SOURCE_SHA:0:12}"
+          fi
+          echo "Release build version: $version"
+          echo "release_version=$version" >> "$GITHUB_OUTPUT"
+
   build-windows:
     name: Windows
+    needs: version
     permissions:
       actions: read
       contents: read
@@ -37,7 +70,7 @@ jobs:
       build_only: false
       build_tests: ${{ github.event_name == 'workflow_dispatch' && inputs.build_tests }}
       release_commit: ${{ github.sha }}
-      release_version: ${{ inputs.release_version || vars.RELEASE_BUILD_VERSION || '2.0.0-pr-validation' }}
+      release_version: ${{ needs.version.outputs.release_version }}
       release_artifact_retention_days: 14
       symbol_product_name: Vibeshine
       symbol_release_prefix: shine
