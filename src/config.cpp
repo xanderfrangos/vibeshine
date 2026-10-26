@@ -930,6 +930,9 @@ namespace config {
     false,  // remote_monitor_disconnect_on_client_disconnect
     false,  // remote_monitor_terminate_on_first_request
     true,  // remote_monitor_confirm_app_replacement
+    true,  // app_remote_input
+    true,  // app_remote_monitor
+    true,  // app_resume_terminate
 
     {
       video_t::dd_t::config_option_e::verify_only,  // configuration_option
@@ -1884,6 +1887,9 @@ namespace config {
     bool_f(vars, "remote_monitor_disconnect_on_client_disconnect", video.remote_monitor_disconnect_on_client_disconnect);
     bool_f(vars, "remote_monitor_terminate_on_first_request", video.remote_monitor_terminate_on_first_request);
     bool_f(vars, "remote_monitor_confirm_app_replacement", video.remote_monitor_confirm_app_replacement);
+    bool_f(vars, "app_remote_input", video.app_remote_input);
+    bool_f(vars, "app_remote_monitor", video.app_remote_monitor);
+    bool_f(vars, "app_resume_terminate", video.app_resume_terminate);
 
     generic_f(vars, "dd_configuration_option", video.dd.configuration_option, dd::config_option_from_view);
     generic_f(vars, "dd_resolution_option", video.dd.resolution_option, dd::resolution_option_from_view);
@@ -2065,6 +2071,8 @@ namespace config {
     string_f(vars, "audio_sink", audio.sink);
     string_f(vars, "virtual_sink", audio.virtual_sink);
     bool_f(vars, "stream_audio", audio.stream);
+    string_restricted_f(vars, "audio_format", audio.format, {"opus"sv, "ac3"sv, "eac3"sv});
+    bool_f(vars, "high_quality_audio", audio.high_quality_audio);
     bool_f(vars, "audio_sink_capture_only", audio.sink_capture_only);
     bool_f(vars, "install_steam_audio_drivers", audio.install_steam_drivers);
 

@@ -71,6 +71,16 @@ namespace remote_session {
     bool may_terminate {};
   };
 
+  // Host controls injected into the Moonlight catalogue. Each one can be
+  // turned off to restore the matching pre-1.19 behavior.
+  struct catalogue_options_t {
+    bool remote_input {true};
+    bool remote_monitor {true};
+    // Without Resume/Terminate, other clients see the running game as busy and
+    // use Moonlight's own Resume/Quit, as they did before these controls.
+    bool resume_terminate {true};
+  };
+
   struct projection_t {
     bool free {true};
     std::int32_t current_game {};
@@ -205,11 +215,15 @@ namespace remote_session {
     const game_t &game,
     const owner_t &owner,
     bool remote_sessions_active,
-    bool replacement_confirmation_active = false
+    bool replacement_confirmation_active = false,
+    bool legacy_secondary_clients = false
   );
   [[nodiscard]] bool allows_normal_game_cancel(const caller_t &caller, const game_t &game, bool remote_sessions_active);
-  [[nodiscard]] projection_t project(const caller_t &caller, const game_t &game, const owner_t &owner, const std::vector<app_t> &configured, bool remote_sessions_active);
+  [[nodiscard]] projection_t project(const caller_t &caller, const game_t &game, const owner_t &owner, const std::vector<app_t> &configured, bool remote_sessions_active, const catalogue_options_t &options = {});
   [[nodiscard]] dispatch_t dispatch(const caller_t &caller, const game_t &game, const owner_t &owner, control_e control);
+  // A retained Remote Monitor keeps its Resume/Disconnect pair regardless of
+  // the catalogue options so it can always be reached and released.
+  [[nodiscard]] bool control_enabled(control_e control, role_e owner_role, const catalogue_options_t &options);
   /** An exclusively verified retained owner may prepare its output; live and peer captures always join. */
   [[nodiscard]] bool joins_existing_game_output(
     role_e role,

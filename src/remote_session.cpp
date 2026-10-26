@@ -197,19 +197,25 @@ namespace remote_session {
     const game_t &game,
     const owner_t &owner,
     const bool remote_sessions_active,
-    const bool replacement_confirmation_active
+    const bool replacement_confirmation_active,
+    const bool legacy_secondary_clients
   ) {
     if (!game.running) return false;
     if (replacement_confirmation_active) return true;
-    return owner.role == role_e::none && owns_game(caller, game);
+    return owner.role == role_e::none && (legacy_secondary_clients || owns_game(caller, game));
   }
 
   bool allows_normal_game_cancel(const caller_t &caller, const game_t &game, const bool remote_sessions_active) {
     return game.running && caller.paired && caller.may_terminate && (!remote_sessions_active || owns_game(caller, game));
   }
 
-  projection_t project(const caller_t &caller, const game_t &game, const owner_t &owner, const std::vector<app_t> &configured, const bool remote_sessions_active) {
+  projection_t project(const caller_t &caller, const game_t &game, const owner_t &owner, const std::vector<app_t> &configured, const bool remote_sessions_active, const catalogue_options_t &options) {
     projection_t result;
+    const auto append_remote_sessions = [&](const bool prioritized) {
+      const auto control_app = [&](const control_e control) { return prioritized ? prioritized_secondary_control(control) : synthetic(control); };
+      if (options.remote_input) result.catalogue.push_back(control_app(control_e::input));
+      if (options.remote_monitor) result.catalogue.push_back(control_app(control_e::monitor));
+    };
     std::vector<app_t> visible_configured;
     std::copy_if(configured.begin(), configured.end(), std::back_inserter(visible_configured), [&](const app_t &app) {
       if (app.monitor_profile) {
@@ -230,16 +236,16 @@ namespace remote_session {
     // so leaving a stream does not remove its reconnect entry.
     if (!game.running && !remote_sessions_active && owner.role == role_e::none) {
       result.catalogue = std::move(visible_configured);
-      result.catalogue.push_back(synthetic(control_e::input));
-      result.catalogue.push_back(synthetic(control_e::monitor));
+      append_remote_sessions(false);
       return result;
     }
-    if (owns_game(caller, game)) {
+    if (owns_game(caller, game) || (game.running && !options.resume_terminate)) {
+      // Legacy secondary clients see the real busy game, as its owner does,
+      // and resume or quit it through Moonlight's own controls.
       result.free = false;
       result.current_game = game.app.id;
       result.catalogue = visible_configured;
-      result.catalogue.push_back(synthetic(control_e::input));
-      result.catalogue.push_back(synthetic(control_e::monitor));
+      append_remote_sessions(false);
       return result;
     }
     if (game.running) {
@@ -253,13 +259,11 @@ namespace remote_session {
         prioritized_secondary_control(control_e::terminate),
       };
       result.catalogue.insert(result.catalogue.end(), visible_configured.begin(), visible_configured.end());
-      result.catalogue.push_back(prioritized_secondary_control(control_e::input));
-      result.catalogue.push_back(prioritized_secondary_control(control_e::monitor));
+      append_remote_sessions(true);
       return result;
     }
     result.catalogue = visible_configured;
-    result.catalogue.push_back(synthetic(control_e::input));
-    result.catalogue.push_back(synthetic(control_e::monitor));
+    append_remote_sessions(false);
     return result;
   }
 
@@ -309,6 +313,17 @@ namespace remote_session {
       default: break;
     }
     return result;
+  }
+
+  bool control_enabled(const control_e control, const role_e owner_role, const catalogue_options_t &options) {
+    switch (control) {
+      case control_e::input: return options.remote_input;
+      case control_e::monitor: return options.remote_monitor;
+      case control_e::resume:
+      case control_e::running_game: return options.resume_terminate || owner_role == role_e::monitor;
+      case control_e::terminate: return options.resume_terminate;
+      default: return true;
+    }
   }
 
   bool joins_existing_game_output(
