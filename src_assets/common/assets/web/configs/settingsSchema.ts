@@ -463,7 +463,6 @@ const remoteMonitorFields = (): SettingsField[] => [
     labelKey: 'ui.settings.fields.remote_monitor_terminate_on_first_request.label',
     descriptionKey: 'ui.settings.fields.remote_monitor_terminate_on_first_request.description',
     platform: ['windows', 'linux'],
-    visibleWhen: { key: 'app_resume_terminate', equals: true },
   }),
 ];
 

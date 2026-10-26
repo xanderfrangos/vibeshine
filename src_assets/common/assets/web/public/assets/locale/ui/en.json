@@ -1773,7 +1773,7 @@
           "label": "Show Remote Monitor"
         },
         "app_resume_terminate": {
-          "description": "While one device is streaming a game, show other devices a Resume app, a copy of the running game at the top of their list, and a Terminate app that closes the game but keeps Remote Input and Remote Monitor connected. Turn this off to bring back Moonlight's own Resume and Quit buttons on the running game, as before Vibeshine 1.19. Launching Remote Input or Remote Monitor from those devices while a game runs then asks to quit the game first.",
+          "description": "While one device is streaming a game, show other devices a Resume app, a copy of the running game at the top of their list, and a Terminate app that closes the game but keeps Remote Input and Remote Monitor connected. Turn this off to bring back Moonlight's own Resume and Quit buttons on the running game, as before Vibeshine 1.19. Launching Remote Input or Remote Monitor from those devices while a game runs then asks to quit the game first. While Remote Input or Remote Monitor is in use, Resume and Terminate still appear on other devices, because Quit would end those sessions too.",
           "label": "Show Resume and Terminate for other devices"
         },
         "capture": {

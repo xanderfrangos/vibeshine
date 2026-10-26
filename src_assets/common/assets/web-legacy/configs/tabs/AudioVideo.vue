@@ -555,10 +555,7 @@ function selectVirtualDisplayLayout(v: unknown) {
                         </span>
                       </div>
                     </n-checkbox>
-                    <n-checkbox
-                      v-if="config.app_resume_terminate !== false"
-                      v-model:checked="config.remote_monitor_terminate_on_first_request"
-                    >
+                    <n-checkbox v-model:checked="config.remote_monitor_terminate_on_first_request">
                       <div class="flex flex-col">
                         <span class="text-sm font-medium">
                           {{ $t('config.remote_monitor_terminate_on_first_request') }}

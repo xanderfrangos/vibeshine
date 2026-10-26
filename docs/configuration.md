@@ -1678,6 +1678,15 @@ actions on that game's entry. Because Moonlight then treats any other entry as a
 different app, launching Remote Input or Remote Monitor from those clients while
 a game is running asks to quit the game first.
 
+While any client has Remote Input or Remote Monitor in use, Moonlight's Quit
+from a client other than the game's owner is refused, because it would also end
+those sessions. For that time the entries return to every client except the
+game's owner, including the Remote Input or Remote Monitor client itself, so the
+game can still be resumed or ended with **Terminate**. They are hidden again once
+no Remote Input or Remote Monitor is in use; a retained Remote Monitor counts as
+in use until it is released. [remote_monitor_terminate_on_first_request](#remote_monitor_terminate_on_first_request)
+applies to **Terminate** during that time.
+
 ### dd_configuration_option
 
 <table>
