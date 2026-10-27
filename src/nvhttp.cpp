@@ -2140,6 +2140,9 @@ namespace nvhttp {
   constexpr auto pairing_session_expiry = std::chrono::minutes(10);
   client_t client_root;
   std::mutex client_mutex;
+  // Serialize layout writes with pairing removal, including the coordinator
+  // update, so a validated concurrent PUT cannot resurrect a removed UUID.
+  std::mutex display_layout_mutex;
   // This is deliberately separate from client_root: an unreadable or
   // semantically invalid state file must never turn into an empty in-memory
   // database that a later metadata save can persist over the real one.
@@ -2362,6 +2365,7 @@ namespace nvhttp {
     const auto &vibeshine_path = statefile::vibeshine_state_path();
     const auto sunshine_backup_path = statefile::sunshine_state_backup_path();
 
+    std::lock_guard layout_lock(display_layout_mutex);
     std::lock_guard<std::mutex> state_lock(statefile::state_mutex());
 
     struct parsed_state_t {
@@ -4161,7 +4165,7 @@ namespace nvhttp {
     nlohmann::json named_cert_nodes = nlohmann::json::array();
     const client_t client = client_root_snapshot();
 #ifdef _WIN32
-    // Read only: do not open/recover a driver merely to populate the UI.
+    // A temporary control handle queries capability without changing driver state.
     const bool catalog_supported = VDISPLAY::supportsRequestedResolutionCatalog();
 #endif
     std::list<std::string> connected_uuids = rtsp_stream::get_all_session_client_uuids();
@@ -4227,12 +4231,14 @@ namespace nvhttp {
   }
 
   bool set_remote_display_layout(const nlohmann::json &layout, std::string &error) {
+    std::lock_guard layout_lock(display_layout_mutex);
+    const auto physical_ids = remote_display_topology::instance().physical_node_ids();
     std::vector<std::string> known_clients;
     {
       std::lock_guard lock(client_mutex);
       for (const auto &client : client_root.named_devices) known_clients.push_back(client.uuid);
     }
-    if (!remote_display_topology::validate_layout(layout, known_clients, remote_display_topology::instance().physical_node_ids(), error)) return false;
+    if (!remote_display_topology::validate_layout(layout, known_clients, physical_ids, error)) return false;
     const auto canonical_layout = remote_display_topology::normalize_layout(layout);
     {
       std::lock_guard lock(client_mutex);
@@ -6684,10 +6690,14 @@ launch_session->exact_target_hold.reset();
 
     std::vector<named_cert_t> clients;
     {
-      std::lock_guard<std::mutex> lock(client_mutex);
-      clients = std::move(client_root.named_devices);
-      client_root = client_t {};
-      cert_chain.clear();
+      std::lock_guard layout_lock(display_layout_mutex);
+      {
+        std::lock_guard<std::mutex> lock(client_mutex);
+        clients = std::move(client_root.named_devices);
+        client_root = client_t {};
+        cert_chain.clear();
+      }
+      remote_display_topology::instance().set_layout(nlohmann::json {});
     }
     clear_tls_client_identities();
     // Every launch/resume handler holds this gate from before identity lookup
@@ -6995,7 +7005,8 @@ launch_session->exact_target_hold.reset();
 
     bool removed = false;
     {
-      std::lock_guard<std::mutex> lock(client_mutex);
+      std::lock_guard layout_lock(display_layout_mutex);
+      std::unique_lock<std::mutex> lock(client_mutex);
       for (auto it = client_root.named_devices.begin(); it != client_root.named_devices.end();) {
         if ((*it).uuid == uuid) {
           it = client_root.named_devices.erase(it);
@@ -7005,6 +7016,14 @@ launch_session->exact_target_hold.reset();
         }
       }
       if (removed) {
+        nlohmann::json layout;
+        try {
+          layout = nlohmann::json::parse(client_root.remote_display_layout_json);
+        } catch (...) {
+          layout = nlohmann::json {};
+        }
+        layout = remote_display_topology::remove_client_from_layout(layout, std::string {uuid});
+        client_root.remote_display_layout_json = layout.dump();
         std::vector<std::string> certificate_identities;
         std::vector<pairing_policy::paired_client_record_view_t> records;
         std::vector<crypto::x509_t> parsed_certificates;
@@ -7016,6 +7035,8 @@ launch_session->exact_target_hold.reset();
         } else {
           BOOST_LOG(error) << "Pairing state became invalid while rebuilding authorization after unpair; denying all TLS clients.";
         }
+        lock.unlock();
+        remote_display_topology::instance().set_layout(std::move(layout));
       }
     }
 
