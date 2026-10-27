@@ -20,6 +20,7 @@ namespace platf::steam::big_picture::debug_port {
     std::optional<std::filesystem::path> root;  ///< Steam's folder: the running steam.exe's, else the registered one.
     bool running = false;  ///< steam.exe runs in the console session.
     bool flag_file = false;  ///< The debug-port flag file exists in root.
+    bool flag_file_created = false;  ///< Vibeshine created that file, so turning the controls off may delete it.
     bool big_picture = false;  ///< Steam's Big Picture window is open.
   };
 
@@ -36,8 +37,9 @@ namespace platf::steam::big_picture::debug_port {
   void remove_created_flag_file();
 
   // Close Steam and start it again as the console user, in Big Picture when big_picture is set. Blocks
-  // while Steam closes (up to 40 s). A stop request cuts that wait to 10 s more, but Steam is still
-  // started again. Returns an error message on failure.
+  // while Steam closes; after 40 s, waits for steam.exe even if its web helpers are still running,
+  // and gives up if it is still running 3 minutes after the shutdown request. A stop request cuts
+  // that wait to 10 s more, but Steam is still started again. Returns an error message on failure.
   std::optional<std::string> restart_steam(std::stop_token stop, bool big_picture);
 }  // namespace platf::steam::big_picture::debug_port
 #endif
