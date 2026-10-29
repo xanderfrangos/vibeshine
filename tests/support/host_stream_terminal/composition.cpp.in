@@ -268,6 +268,9 @@ int main() {
  check(topology.managed_client_identity_count()==0 && !topology.shutdown_complete(),"removed display retains pending physical restore");
  terminal();check(!physical,"empty-map pending restore failure prevents final physical cleanup");
  fail=false;terminal();check(physical && topology.shutdown_complete(),"empty-map pending restore succeeds on retry");
+ // Host End Stream must hand Moonlight the normal-close code, not a dropped link.
+ reset();running=1;server._session_state->sessions.insert(std::make_shared<stream::session_t>());terminal();
+ check(graceful_stops==1 && abrupt_stops==0,"actual terminal stops live sessions gracefully");
  // Exercise the unchanged ANNOUNCE parser and production negotiation helper,
  // controlling only FFmpeg encoder discovery. Each accepted session must still
  // transfer and retire its resource owner through the real terminal path.
@@ -303,9 +306,6 @@ int main() {
    } else check(running==0 && server.startup_pool.queue.empty(),"rejected negotiation never queues capture");
    terminal();check(resource.expired() && running==0 && !late_ordinary,"terminal drains negotiated or rejected session resources before recovery");
  }
- // Host End Stream must hand Moonlight the normal-close code, not a dropped link.
- reset();running=1;server._session_state->sessions.insert(std::make_shared<stream::session_t>());terminal();
- check(graceful_stops==1 && abrupt_stops==0,"actual terminal stops live sessions gracefully");
  auto fresh=host_stream_control::start_guard_t(host_stream_control::request_ticket());check(bool(fresh),"fresh starts remain eligible after terminal reopen");
  return failures?1:0;
 }

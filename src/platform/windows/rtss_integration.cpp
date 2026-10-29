@@ -451,7 +451,9 @@ namespace platf {
       trust_data.dwProvFlags = WTD_REVOCATION_CHECK_NONE | WTD_DISABLE_MD2_MD4;
 
       GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-      const LONG trust_result = WinVerifyTrust(static_cast<HWND>(INVALID_HANDLE_VALUE), &action, &trust_data);
+      // WinVerifyTrust uses this sentinel to indicate there is no interactive user.
+      const HWND no_interactive_user = reinterpret_cast<HWND>(INVALID_HANDLE_VALUE);
+      const LONG trust_result = WinVerifyTrust(no_interactive_user, &action, &trust_data);
       std::optional<signer_fingerprint_t> fingerprint;
       if (trust_result == ERROR_SUCCESS) {
         CRYPT_PROVIDER_DATA *provider = WTHelperProvDataFromStateData(trust_data.hWVTStateData);
@@ -472,7 +474,7 @@ namespace platf {
       }
 
       trust_data.dwStateAction = WTD_STATEACTION_CLOSE;
-      WinVerifyTrust(static_cast<HWND>(INVALID_HANDLE_VALUE), &action, &trust_data);
+      WinVerifyTrust(no_interactive_user, &action, &trust_data);
       return fingerprint;
     }
 
