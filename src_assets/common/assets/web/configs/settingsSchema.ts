@@ -420,18 +420,6 @@ const virtualDisplayCustomizationFields = (): SettingsField[] => [
 ];
 
 const remoteMonitorFields = (): SettingsField[] => [
-  boolean('app_remote_input', {
-    labelKey: 'ui.settings.fields.app_remote_input.label',
-    descriptionKey: 'ui.settings.fields.app_remote_input.description',
-  }),
-  boolean('app_remote_monitor', {
-    labelKey: 'ui.settings.fields.app_remote_monitor.label',
-    descriptionKey: 'ui.settings.fields.app_remote_monitor.description',
-  }),
-  boolean('app_resume_terminate', {
-    labelKey: 'ui.settings.fields.app_resume_terminate.label',
-    descriptionKey: 'ui.settings.fields.app_resume_terminate.description',
-  }),
   number('virtual_display_max_clients', {
     labelKey: 'ui.settings.fields.virtual_display_max_clients.label',
     descriptionKey: 'ui.settings.fields.virtual_display_max_clients.description',
@@ -1155,9 +1143,6 @@ export const settingsDefaults: Record<string, unknown> = {
   remote_monitor_disconnect_on_client_disconnect: false,
   remote_monitor_terminate_on_first_request: false,
   remote_monitor_confirm_app_replacement: true,
-  app_remote_input: true,
-  app_remote_monitor: true,
-  app_resume_terminate: true,
   dd_virtual_display_scale: 0,
   frame_limiter_enable: false,
   frame_limiter_provider: 'auto',

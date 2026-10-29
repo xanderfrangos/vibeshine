@@ -137,9 +137,6 @@ const defaultGroups = [
       remote_monitor_disconnect_on_client_disconnect: false,
       remote_monitor_terminate_on_first_request: false,
       remote_monitor_confirm_app_replacement: true,
-      app_remote_input: true,
-      app_remote_monitor: true,
-      app_resume_terminate: true,
       dd_configuration_option: 'verify_only',
       dd_resolution_option: 'auto',
       dd_manual_resolution: '',
@@ -666,9 +663,6 @@ export const useConfigStore = defineStore('config', () => {
       'realtime_stats_show_session_history',
       'rtx_hdr',
       'rtx_hdr_force_sdr',
-      'app_remote_input',
-      'app_remote_monitor',
-      'app_resume_terminate',
     ];
     const allBoolKeys = playniteBoolKeys.concat(otherBoolKeys);
     const toBool = (v: any): boolean | null => {
