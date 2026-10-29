@@ -789,6 +789,12 @@ export const useConfigStore = defineStore('config', () => {
     (config.value as Record<string, unknown>)[key] = value; // triggers setter (handles manual/auto)
   }
 
+  // Record a value another request already saved, so a later full save doesn't send the old one.
+  function setSavedValue(key: string, value: unknown) {
+    if (!_data.value) return;
+    (_data.value as Record<string, unknown>)[key] = value;
+  }
+
   // Explicitly mark a manual-dirty change (e.g., when mutating nested fields)
   function markManualDirty(_key?: string) {
     manualDirty.value = true;
@@ -1122,6 +1128,7 @@ export const useConfigStore = defineStore('config', () => {
     fetchConfig,
     setConfig,
     updateOption,
+    setSavedValue,
     setAdapterPreference,
     markManualDirty,
     resetManualDirty,
