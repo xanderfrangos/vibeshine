@@ -14,7 +14,8 @@
 // - Steam code is found by stable names (text IDs, prop names, CSS keys, method names), never by
 //   minified identifiers or module ids. Menu components are learned from Steam's own Power menu.
 // - Patches check an on/off flag, so switching off never unwinds another mod's patches. After too many
-//   errors the script switches itself off.
+//   errors the script switches itself off. Switching off redraws what we rendered, so none of it stays
+//   on screen.
 //
 // Status arrives via window.VibeshineBPM.setStatus(); actions and reports go back through
 // window.__vibeshineBridge, a CDP binding the helper installs. The helper also calls heartbeat() every
@@ -61,7 +62,7 @@
     if (state.started) sendToBridge({ type: 'feature', name, value });
   }
 
-  function disable(reason, { notify = true } = {}) {
+  function disable(reason, { notify: announce = true } = {}) {
     if (!state.enabled) return;
     state.enabled = false;
     for (const undo of cleanups.splice(0)) {
@@ -69,7 +70,10 @@
         undo();
       } catch {}
     }
-    if (notify) sendToBridge({ type: 'disabled', reason });
+    // Nothing else redraws what we rendered, so it would stay on screen, frozen, until Big Picture
+    // reopens. The store now reads as empty, so it redraws as nothing.
+    notify();
+    if (announce) sendToBridge({ type: 'disabled', reason });
   }
 
   function recordError(where, error) {
@@ -160,6 +164,7 @@
   const h = React.createElement;
   const MEMO = Symbol.for('react.memo');
   const FORWARD_REF = Symbol.for('react.forward_ref');
+  const CONTEXT = Symbol.for('react.context');
 
   // Steam UI building blocks. Each is optional: features fall back when one is missing.
   const inMenuModule = (s) => has(s, 'onSelected', 'contextMenuItem');
@@ -185,6 +190,13 @@
       (s) => s.includes('GetContextMenuManagerFromWindow'),
       (v) => typeof v === 'function' && has(srcOf(v), 'GetContextMenuManagerFromWindow', 'CreateContextMenuInstance'),
     ),
+    // The Steam window a component is drawn for: in a game, the game's overlay, even for the Quick
+    // Access Menu drawn over it. Its value has the window as BrowserWindow.
+    windowContext: findExport(
+      'windowContext',
+      (s) => has(s, 'createContext', 'VirtualKeyboardManager', '.instance'),
+      (v) => v?.$$typeof === CONTEXT,
+    ),
   };
   const ContextMenuManager = findExport(
     'contextMenuHook',
@@ -204,13 +216,13 @@
   let status = null;
   // The helper checks in every 5 s, with heartbeat() or setStatus(). When it goes quiet it has
   // stopped, crashed or been uninstalled, and nothing would act on our entries, so they hide (the
-  // store reads as empty) until it checks in again.
+  // store reads as empty) until it checks in again. It also reads as empty once the script is off.
   const STALE_AFTER_MS = 15000;
   let lastHeard = Date.now();
   let stale = false;
   const listeners = new Set();
   const store = {
-    get: () => (stale ? null : status),
+    get: () => (stale || !state.enabled ? null : status),
     subscribe(fn) {
       listeners.add(fn);
       return () => listeners.delete(fn);
@@ -447,33 +459,50 @@
 
   const canShowOwnMenu = () => !!(ui.showContextMenu && parts.Menu && parts.MenuItem && parts.MenuSeparator) && !simulateMissing.has('headerMenu');
   function updateHeaderMenuFeature() {
-    setFeature('header_menu', canShowOwnMenu() ? `ok (menu parts: ${parts.source})` : 'fallback: icon opens the Power menu');
+    const inGames = ui.windowContext ? '' : '; in games it opens inside the Quick Access Menu';
+    setFeature('header_menu', canShowOwnMenu() ? `ok (menu parts: ${parts.source}${inGames})` : 'fallback: icon opens the Power menu');
   }
 
   function HeaderMenuItems({ MenuItem, MenuSeparator }) {
     const s = useStatus();
     crashIfSimulated('header-menu-items');
+    // An open menu empties once the helper is gone or the script is off.
+    if (!s) return null;
     return h(React.Fragment, null, h(MenuItem, { key: 'info', disabled: true }, describeStream(s) || label(s, 'idle')), h(MenuSeparator, { key: 'sep' }), ...actionItems(s, MenuItem));
   }
 
-  function openPowerMenu() {
+  function openPowerMenu(anchor) {
     const open = window.SteamUIStore?.OpenPowerMenu;
     if (typeof open !== 'function') throw new Error('SteamUIStore.OpenPowerMenu not available');
-    open.call(window.SteamUIStore, null);
+    open.call(window.SteamUIStore, anchor);
   }
 
-  const openVibeshineMenu = safeHandler('header-menu', (evt) => {
-    if (!canShowOwnMenu()) return openPowerMenu();
-    const win = evt?.currentTarget?.ownerDocument?.defaultView ?? evt?.target?.ownerDocument?.defaultView ?? window;
+  // Steam opens a menu in the window of the element it is given, and in the main Big Picture window
+  // for anything else, a window included. In a game that window would come to the front and stay
+  // there once the menu closes. The header then sits in the Quick Access Menu over the game, which
+  // keeps its own menus inside its narrow panel, so the menu opens on the root of the game's overlay
+  // and covers the screen like the Power menu; Steam's VR Power button does the same. Without that
+  // window, the icon itself still keeps the menu over the game.
+  function menuAnchor(evt, steamWindow) {
+    const root = steamWindow?.BrowserWindow?.document?.documentElement;
+    return [root, evt?.currentTarget, evt?.target].find((node) => node?.ownerDocument?.defaultView) ?? null;
+  }
+
+  const openVibeshineMenu = safeHandler('header-menu', (evt, steamWindow) => {
+    if (!state.enabled) return;
+    const anchor = menuAnchor(evt, steamWindow);
+    if (!canShowOwnMenu()) return openPowerMenu(anchor);
     const s = store.get();
     const title = s?.clients?.length ? label(s, 'menuTitleStreaming', clientNames(s)) : label(s, 'menuTitlePaused');
     const { Menu, MenuItem, MenuSeparator } = parts;
-    ui.showContextMenu(h(Menu, { label: title }, safe('header-menu-items', h(HeaderMenuItems, { MenuItem, MenuSeparator }))), win);
+    ui.showContextMenu(h(Menu, { label: title }, safe('header-menu-items', h(HeaderMenuItems, { MenuItem, MenuSeparator }))), anchor);
   });
 
   const FALLBACK_ICON_STYLE = { display: 'flex', alignItems: 'center', padding: '0 10px', height: '100%', cursor: 'pointer' };
+  const NO_WINDOW_CONTEXT = React.createContext(null);
   function HeaderIcon() {
     const s = useStatus();
+    const steamWindow = React.useContext(ui.windowContext ?? NO_WINDOW_CONTEXT);
     crashIfSimulated('header-icon');
     if (!state.enabled || !isActive(s)) return null;
     const live = s.clients?.length > 0;
@@ -486,8 +515,9 @@
       title: text,
       style: { ...(css ? null : FALLBACK_ICON_STYLE), color: live ? '#5ad45a' : '#f0b03c' },
     };
-    if (ui.Focusable) return h(ui.Focusable, { ...common, noFocusRing: true, onActivate: openVibeshineMenu, onOKActionDescription: 'Vibeshine' }, streamIcon());
-    return h('div', { ...common, tabIndex: 0, onClick: openVibeshineMenu }, streamIcon());
+    const open = (evt) => openVibeshineMenu(evt, steamWindow);
+    if (ui.Focusable) return h(ui.Focusable, { ...common, noFocusRing: true, onActivate: open, onOKActionDescription: 'Vibeshine' }, streamIcon());
+    return h('div', { ...common, tabIndex: 0, onClick: open }, streamIcon());
   }
 
   // Arrays of children reachable from an element (depth-limited), in tree order.
@@ -505,13 +535,53 @@
   const ICON_KEY = 'vibeshine-indicator';
   const isOurIcon = (el) => React.isValidElement(el) && el.key === ICON_KEY;
 
+  // A header on screen keeps the element we put in it, even after this injection is replaced, and
+  // Steam may keep the list holding it between renders. So that element is a slot shared by every
+  // injection into this Steam UI: it shows the current injection's icon and redraws when that changes.
+  // It does nothing else, since the first injection's copy is the one that stays.
+  const SLOT_VERSION = 1;
+  function headerSlot() {
+    const existing = window.__vibeshineHeaderSlot;
+    if (existing?.version === SLOT_VERSION) return existing;
+    const shared = { version: SLOT_VERSION, content: null, listeners: new Set() };
+    const subscribe = (fn) => {
+      shared.listeners.add(fn);
+      return () => shared.listeners.delete(fn);
+    };
+    const get = () => shared.content;
+    shared.Slot = function VibeshineHeaderSlot() {
+      const Content = React.useSyncExternalStore(subscribe, get);
+      return Content ? h(Content) : null;
+    };
+    window.__vibeshineHeaderSlot = shared;
+    return shared;
+  }
+  function showInSlot(shared, content) {
+    shared.content = content;
+    for (const fn of shared.listeners) {
+      try {
+        fn();
+      } catch (e) {
+        recordError('header-slot', e);
+      }
+    }
+  }
+  const HeaderIconContent = () => safe('header-icon', h(HeaderIcon));
+  let slot = null; // Set once the header is patched.
+
   function insertHeaderIcon(bar) {
     const arrays = childArrays(bar);
     // Steam may return the same children array on every render (memoized, or hoisted by its
-    // compiler), so the icon from an earlier render can still be in it.
-    if (arrays.some((list) => list.some(isOurIcon))) return;
+    // compiler), so the slot from an earlier render or injection can still be in it.
+    for (const list of arrays) {
+      const i = list.findIndex(isOurIcon);
+      if (i < 0) continue;
+      // An icon from a script with another slot would stay frozen: put ours in its place.
+      if (list[i].type !== slot.Slot && !Object.isFrozen(list)) list[i] = h(slot.Slot, { key: ICON_KEY });
+      return;
+    }
     const lists = arrays.filter((list) => !Object.isFrozen(list));
-    const icon = safe('header-icon', h(HeaderIcon), ICON_KEY);
+    const icon = h(slot.Slot, { key: ICON_KEY });
     for (const list of lists) {
       const i = list.findIndex(isClockSlot);
       if (i >= 0) {
@@ -535,24 +605,28 @@
     updateHeaderMenuFeature();
     if (!HeaderBar) return setFeature('header_icon', 'off: header component not found');
     if (options.checkOnly) return setFeature('header_icon', 'ready');
+    slot = headerSlot();
     const original = HeaderBar.type;
     const patched = disguise(function VibeshineHeaderBar(...args) {
       const bar = original.apply(this, args);
-      if (!state.enabled || !React.isValidElement(bar)) return bar;
+      // A header on screen keeps the wrapper it was created with, so the icon comes from whichever
+      // injection is current, and none once the controls are off. decorateHeader records its errors.
       try {
-        insertHeaderIcon(bar);
-      } catch (e) {
-        recordError('header', e);
-      }
+        window.VibeshineBPM?.decorateHeader?.(bar);
+      } catch {}
       return bar;
     }, original);
     HeaderBar.type = patched;
+    // A slot already on screen, from an earlier injection, shows our icon straight away.
+    const onScreen = slot.listeners.size > 0;
+    showInSlot(slot, HeaderIconContent);
     cleanups.push(() => {
       if (HeaderBar.type === patched) HeaderBar.type = original;
+      if (slot.content === HeaderIconContent) showInSlot(slot, null);
     });
     // React reads a memo component's inner type only when the component is created, so a header that
-    // is already on screen keeps rendering without the icon until Big Picture opens again.
-    setFeature('header_icon', 'ready; appears the next time Big Picture opens');
+    // is already on screen without our wrapper keeps rendering without the icon until Big Picture opens again.
+    setFeature('header_icon', onScreen ? 'ok (already in the header)' : 'ready; appears the next time Big Picture opens');
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -582,6 +656,15 @@
     setStatus,
     heartbeat,
     report,
+    // Called by the header wrapper of this injection or an earlier one.
+    decorateHeader(bar) {
+      if (!slot || !state.enabled || !React.isValidElement(bar)) return;
+      try {
+        insertHeaderIcon(bar);
+      } catch (e) {
+        recordError('header', e);
+      }
+    },
     unpatch() {
       disable('replaced', { notify: false });
       if (window.VibeshineBPM === api) delete window.VibeshineBPM;

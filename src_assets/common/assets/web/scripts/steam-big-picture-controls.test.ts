@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createSteam, findHost, menuLabels, render } from './support/fake-steam.ts';
+import { createSteam, findHost, menuLabels, mount, render } from './support/fake-steam.ts';
 
 const STEAM_POWER_MENU = [
   'Suspend System',
@@ -33,6 +33,20 @@ const idle = { ...streaming, appRunning: false, appName: '', clients: [], stream
 
 const isIcon = (node: { props: Record<string, any> }) =>
   String(node.props.className ?? '').includes('vibeshine-bpm-indicator');
+
+/** Colours of the header icons on screen; more than one means a stale icon was left behind. */
+function iconColors(nodes: ReturnType<typeof render>): string[] {
+  const colors: string[] = [];
+  const walk = (list: ReturnType<typeof render>) => {
+    for (const node of list) {
+      if (typeof node === 'string') continue;
+      if (isIcon(node)) colors.push(node.props.style.color);
+      else walk(node.children);
+    }
+  };
+  walk(nodes);
+  return colors;
+}
 
 function headerOrder(nodes: ReturnType<typeof render>): string[] {
   const header = findHost(nodes, (node) => node.props.id === 'header');
@@ -243,6 +257,100 @@ test('shows an amber icon while the game runs with nobody connected, and none wh
   assert.equal(findHost(steam.renderHeader(), isIcon), undefined);
 });
 
+test('shows the icon in a header on screen as soon as a stream starts', () => {
+  const steam = createSteam();
+  steam.inject();
+  steam.window.VibeshineBPM.setStatus(idle);
+  const header = steam.mountHeader();
+  assert.deepEqual(iconColors(header.nodes()), []);
+  steam.window.VibeshineBPM.setStatus(streaming);
+  assert.deepEqual(iconColors(header.nodes()), ['#5ad45a']);
+});
+
+for (const hoistHeaderItems of [false, true]) {
+  const shape = hoistHeaderItems ? ', with header items Steam keeps between renders' : '';
+
+  test(`removes the header icon on screen when the controls are turned off${shape}`, () => {
+    const steam = createSteam({ hoistHeaderItems });
+    steam.inject();
+    steam.window.VibeshineBPM.setStatus(streaming);
+    const header = steam.mountHeader();
+    assert.deepEqual(iconColors(header.nodes()), ['#5ad45a']);
+    // The helper unpatches when it stops, as when the controls are turned off.
+    steam.window.VibeshineBPM.unpatch();
+    assert.deepEqual(iconColors(header.nodes()), []);
+    assert.deepEqual(iconColors(header.update()), []);
+  });
+
+  test(`a header on screen shows the new injection's icon after the helper restarts${shape}`, () => {
+    const steam = createSteam({ hoistHeaderItems });
+    steam.inject();
+    steam.window.VibeshineBPM.setStatus(streaming);
+    const header = steam.mountHeader();
+    assert.deepEqual(iconColors(header.nodes()), ['#5ad45a']);
+
+    const report = steam.inject();
+    assert.equal(report.features.header_icon, 'ok (already in the header)');
+    // The new injection has no status yet, so the old icon must not linger.
+    assert.deepEqual(iconColors(header.nodes()), []);
+    steam.window.VibeshineBPM.setStatus(paused);
+    assert.deepEqual(iconColors(header.nodes()), ['#f0b03c']);
+    assert.deepEqual(iconColors(header.update()), ['#f0b03c']);
+  });
+}
+
+test('replaces an icon a script with another header slot left in the header list', () => {
+  const steam = createSteam({ hoistHeaderItems: true });
+  steam.inject();
+  steam.window.VibeshineBPM.setStatus(streaming);
+  steam.renderHeader();
+  // As if the next script came with a different slot.
+  steam.window.__vibeshineHeaderSlot.version = 0;
+  steam.inject();
+  steam.window.VibeshineBPM.setStatus(paused);
+  assert.deepEqual(iconColors(steam.renderHeader()), ['#f0b03c']);
+});
+
+test('removes the header icon on screen when too many errors switch the script off', () => {
+  const steam = createSteam();
+  steam.inject({ simulateCrash: ['power-items'], maxErrors: 2 });
+  steam.window.VibeshineBPM.setStatus(streaming);
+  const header = steam.mountHeader();
+  assert.deepEqual(iconColors(header.nodes()), ['#5ad45a']);
+  steam.openPowerMenu();
+  steam.openPowerMenu();
+  assert.equal(steam.window.VibeshineBPM.report().enabled, false);
+  assert.deepEqual(iconColors(header.nodes()), []);
+});
+
+test('an open Power menu drops its entries when the script switches off', () => {
+  const steam = createSteam();
+  steam.inject();
+  steam.window.VibeshineBPM.setStatus(streaming);
+  steam.window.SteamUIStore.OpenPowerMenu();
+  const menu = mount(steam.createdMenus.at(-1)!.element);
+  assert.equal(menuLabels(menu.nodes())[0], 'End Stream (Vibeshine)');
+  steam.window.VibeshineBPM.unpatch();
+  // Only our entries redraw, and the store they read now serves nothing.
+  assert.deepEqual(menuLabels(menu.nodes()), STEAM_POWER_MENU);
+});
+
+test('an open Vibeshine menu empties when the script switches off', () => {
+  const steam = createSteam();
+  steam.inject();
+  steam.window.VibeshineBPM.setStatus(streaming);
+  const icon = findHost(steam.renderHeader(), isIcon)!;
+  icon.props.onActivate();
+  const menu = mount(steam.createdMenus.at(-1)!.element);
+  assert.equal(menuLabels(menu.nodes())[2], 'End Stream (Vibeshine)');
+  steam.window.VibeshineBPM.unpatch();
+  assert.deepEqual(menuLabels(menu.nodes()), ['----', 'Cancel']);
+  // An icon still on screen for a moment opens nothing.
+  const menus = steam.createdMenus.length;
+  icon.props.onActivate();
+  assert.equal(steam.createdMenus.length, menus);
+});
+
 test('puts the header icon at the end when the clock is not recognised', () => {
   const steam = createSteam({
     clockSource: 'function gi(){return(0,e.jsx)(se,{className:Ne().Time})}',
@@ -279,13 +387,44 @@ test('opens the Vibeshine menu from the header icon', () => {
   assert.equal(steam.calls.openPowerMenu, 0);
 });
 
+// In a game the header sits in the Quick Access Menu, a narrow panel over the game's overlay that
+// keeps its own menus inside it. A menu opened in the main Big Picture window brings Steam to the
+// front and leaves it there once the menu closes.
+const gameOverlay = { name: 'Game overlay' };
+const quickAccessMenu = { name: 'Quick Access Menu' };
+const overlayWindow = { BrowserWindow: { document: { documentElement: { ownerDocument: { defaultView: gameOverlay } } } } };
+const iconElement = { ownerDocument: { defaultView: quickAccessMenu } };
+const selectIcon = { currentTarget: iconElement, target: { ownerDocument: iconElement.ownerDocument } };
+
+test("opens the Vibeshine menu over the whole game, like Steam's Power menu", () => {
+  const steam = createSteam();
+  steam.inject();
+  steam.window.VibeshineBPM.setStatus(streaming);
+  findHost(steam.renderHeader(overlayWindow), isIcon)!.props.onActivate(selectIcon);
+  assert.equal(steam.createdMenus.at(-1)!.window, gameOverlay);
+});
+
+test("keeps the Vibeshine menu over the game without Steam's window", () => {
+  const steam = createSteam();
+  const report = steam.inject({ simulateMissing: ['windowContext'] });
+  assert.equal(
+    report.features.header_menu,
+    'ok (menu parts: search; in games it opens inside the Quick Access Menu)',
+  );
+  steam.window.VibeshineBPM.setStatus(streaming);
+  findHost(steam.renderHeader(overlayWindow), isIcon)!.props.onActivate(selectIcon);
+  assert.equal(steam.createdMenus.at(-1)!.target, iconElement);
+  assert.equal(steam.createdMenus.at(-1)!.window, quickAccessMenu);
+});
+
 test("opens Steam's Power menu from the icon when Steam's menu helper is missing", () => {
   const steam = createSteam();
   const report = steam.inject({ simulateMissing: ['showContextMenu'] });
   assert.equal(report.features.header_menu, 'fallback: icon opens the Power menu');
   steam.window.VibeshineBPM.setStatus(streaming);
-  findHost(steam.renderHeader(), isIcon)!.props.onActivate();
+  findHost(steam.renderHeader(overlayWindow), isIcon)!.props.onActivate(selectIcon);
   assert.equal(steam.calls.openPowerMenu, 1);
+  assert.equal(steam.createdMenus.at(-1)!.window, gameOverlay);
   assert.equal(menuLabels(render(steam.createdMenus.at(-1)!.element))[0], 'End Stream (Vibeshine)');
 });
 

@@ -18,6 +18,7 @@ const ELEMENT = Symbol.for('react.transitional.element');
 const FRAGMENT = Symbol.for('react.fragment');
 const MEMO = Symbol.for('react.memo');
 const FORWARD_REF = Symbol.for('react.forward_ref');
+const CONTEXT = Symbol.for('react.context');
 
 class Component {
   props: any;
@@ -54,19 +55,7 @@ function cloneElement(element: any, config?: any, ...children: any[]) {
   };
 }
 
-export const React = {
-  createElement,
-  cloneElement,
-  isValidElement: (value: any) => value?.$$typeof === ELEMENT,
-  Fragment: FRAGMENT,
-  Component,
-  memo: (type: any) => ({ $$typeof: MEMO, type, compare: null }),
-  forwardRef: (render: any) => ({ $$typeof: FORWARD_REF, render }),
-  useSyncExternalStore: (_subscribe: unknown, getSnapshot: () => unknown) => getSnapshot(),
-  useId: () => ':r0:',
-  version: '19.1.1',
-};
-const h = createElement;
+const isValidElement = (value: any) => value?.$$typeof === ELEMENT;
 
 export interface HostNode {
   tag: string;
@@ -74,32 +63,355 @@ export interface HostNode {
   children: Array<HostNode | string>;
 }
 
-/** Render an element tree to host nodes. Class components with getDerivedStateFromError catch errors
- * thrown below them, like React error boundaries. */
-export function render(node: any): Array<HostNode | string> {
-  if (node == null || typeof node === 'boolean') return [];
-  if (typeof node === 'string' || typeof node === 'number') return [String(node)];
-  if (Array.isArray(node)) return node.flatMap(render);
-  if (!React.isValidElement(node)) throw new Error(`not renderable: ${String(node)}`);
-  const { type, props } = node;
-  if (type === FRAGMENT) return render(props.children);
-  if (typeof type === 'string') return [{ tag: type, props, children: render(props.children) }];
-  if (type?.$$typeof === MEMO) return render({ ...node, type: type.type });
-  if (type?.$$typeof === FORWARD_REF) return render(type.render(props, null));
-  if (typeof type === 'function' && type.prototype?.isReactComponent) {
-    const instance = new type(props);
-    try {
-      return render(instance.render());
-    } catch (error) {
-      if (typeof type.getDerivedStateFromError !== 'function') throw error;
-      instance.state = { ...instance.state, ...type.getDerivedStateFromError(error) };
-      instance.componentDidCatch?.(error);
-      return render(instance.render());
-    }
-  }
-  if (typeof type === 'function') return render(type(props));
+// ---------------------------------------------------------------------------------------------
+// A retained renderer with the React behaviour the script depends on: a component redraws only
+// when its store changes or its parent redraws it with a new element, an element identical to the
+// previous one is skipped (so a list Steam keeps between renders is never looked at again), a memo
+// component keeps the inner type it was created with, and error boundaries catch what throws below
+// them. Updates run synchronously, and store subscriptions start once a render has finished.
+// A context value is read when a component draws; a new value doesn't redraw what reads it.
+// ---------------------------------------------------------------------------------------------
+type Tag =
+  | 'empty'
+  | 'text'
+  | 'host'
+  | 'list'
+  | 'fragment'
+  | 'provider'
+  | 'function'
+  | 'memo'
+  | 'forward'
+  | 'class';
+
+interface StoreHook {
+  subscribe: (onChange: () => void) => () => void;
+  getSnapshot: () => unknown;
+  value: unknown;
+  unsubscribe?: () => void;
+}
+
+interface Fiber {
+  tag: Tag | 'root';
+  node: any; // What this fiber was last rendered from.
+  key: string | null;
+  kind: unknown; // Element type, compared to decide whether a new element updates this fiber.
+  render?: (props: any) => any; // For function components: memo's inner type, captured at mount.
+  props?: any;
+  instance?: any;
+  stores: StoreHook[];
+  children: Fiber[];
+  parent: Fiber | null;
+  alive: boolean;
+}
+
+let currentFiber: Fiber | null = null;
+let hookIndex = 0;
+let rendering = 0;
+let created: Fiber[] = []; // Fibers made by the current render, dropped if a boundary catches.
+const pendingSubscriptions: Array<[Fiber, StoreHook]> = [];
+const dirty = new Set<Fiber>();
+
+function describe(node: any): { tag: Tag; kind: unknown; key: string | null } {
+  if (node == null || typeof node === 'boolean') return { tag: 'empty', kind: null, key: null };
+  if (typeof node === 'string' || typeof node === 'number')
+    return { tag: 'text', kind: null, key: null };
+  if (Array.isArray(node)) return { tag: 'list', kind: null, key: null };
+  if (!isValidElement(node)) throw new Error(`not renderable: ${String(node)}`);
+  const { type, key } = node;
+  if (type === FRAGMENT) return { tag: 'fragment', kind: FRAGMENT, key };
+  if (type?.$$typeof === CONTEXT) return { tag: 'provider', kind: type, key };
+  if (typeof type === 'string') return { tag: 'host', kind: type, key };
+  if (type?.$$typeof === MEMO) return { tag: 'memo', kind: type, key };
+  if (type?.$$typeof === FORWARD_REF) return { tag: 'forward', kind: type, key };
+  if (typeof type === 'function' && type.prototype?.isReactComponent)
+    return { tag: 'class', kind: type, key };
+  if (typeof type === 'function') return { tag: 'function', kind: type, key };
   throw new Error('unknown element type');
 }
+
+const childList = (children: any): any[] =>
+  children === undefined ? [] : Array.isArray(children) ? children : [children];
+
+function shallowEqual(a: any, b: any): boolean {
+  const keys = Object.keys(a ?? {});
+  return (
+    keys.length === Object.keys(b ?? {}).length && keys.every((key) => Object.is(a[key], b[key]))
+  );
+}
+
+function kill(fiber: Fiber): void {
+  if (!fiber.alive) return;
+  fiber.alive = false;
+  for (const hook of fiber.stores) hook.unsubscribe?.();
+  fiber.children.forEach(kill);
+}
+
+function reconcile(parent: Fiber, old: Fiber[], nodes: any[]): Fiber[] {
+  const slotOf = (key: string | null, index: number) => (key == null ? `#${index}` : `k:${key}`);
+  const previous = new Map(old.map((fiber, index) => [slotOf(fiber.key, index), fiber]));
+  const next = nodes.map((node, index) => {
+    const slot = slotOf(describe(node).key, index);
+    const match = previous.get(slot);
+    previous.delete(slot);
+    return build(parent, match, node);
+  });
+  previous.forEach(kill);
+  return next;
+}
+
+/** Update `old` from `node` when it can, else replace it. `force` redraws even an unchanged element. */
+function build(parent: Fiber, old: Fiber | undefined, node: any, force = false): Fiber {
+  if (old?.alive && old.node === node && !force) return old;
+  const { tag, kind, key } = describe(node);
+  if (old?.alive && old.tag === tag && old.kind === kind && old.key === key) {
+    update(old, node, force);
+    return old;
+  }
+  if (old) kill(old);
+  const fiber: Fiber = { tag, node, key, kind, stores: [], children: [], parent, alive: true };
+  created.push(fiber);
+  if (tag === 'memo') fiber.render = node.type.type;
+  else if (tag === 'forward') fiber.render = (props) => node.type.render(props, null);
+  else if (tag === 'function') fiber.render = node.type;
+  else if (tag === 'class') fiber.instance = new node.type(node.props);
+  update(fiber, node, true);
+  return fiber;
+}
+
+function update(fiber: Fiber, node: any, force: boolean): void {
+  const before = fiber.props;
+  fiber.node = node;
+  switch (fiber.tag) {
+    case 'empty':
+    case 'text':
+      return;
+    case 'host':
+    case 'fragment':
+    case 'provider':
+      fiber.props = node.props;
+      fiber.children = reconcile(fiber, fiber.children, childList(node.props.children));
+      return;
+    case 'list':
+      fiber.children = reconcile(fiber, fiber.children, node);
+      return;
+    case 'memo':
+      fiber.props = node.props;
+      if (!force && shallowEqual(before, node.props)) return;
+      renderFunction(fiber);
+      return;
+    case 'function':
+    case 'forward':
+      fiber.props = node.props;
+      renderFunction(fiber);
+      return;
+    case 'class':
+      fiber.props = node.props;
+      fiber.instance.props = node.props;
+      renderClass(fiber);
+      return;
+  }
+}
+
+function renderFunction(fiber: Fiber): void {
+  const outer = [currentFiber, hookIndex] as const;
+  currentFiber = fiber;
+  hookIndex = 0;
+  let rendered: any;
+  try {
+    rendered = fiber.render!(fiber.props);
+  } finally {
+    [currentFiber, hookIndex] = outer;
+  }
+  fiber.children = reconcile(fiber, fiber.children, [rendered]);
+}
+
+const isBoundary = (fiber: Fiber) =>
+  fiber.tag === 'class' && typeof (fiber.kind as any).getDerivedStateFromError === 'function';
+
+function renderClass(fiber: Fiber): void {
+  const mark = created.length;
+  try {
+    fiber.children = reconcile(fiber, fiber.children, [fiber.instance.render()]);
+  } catch (error) {
+    if (!isBoundary(fiber)) throw error;
+    for (const lost of created.splice(mark)) lost.alive = false;
+    showFallback(fiber, error);
+  }
+}
+
+function showFallback(boundary: Fiber, error: unknown): void {
+  const type = boundary.kind as any;
+  boundary.children.forEach(kill);
+  boundary.instance.state = {
+    ...boundary.instance.state,
+    ...type.getDerivedStateFromError(error),
+  };
+  boundary.instance.componentDidCatch?.(error);
+  boundary.children = reconcile(boundary, [], [boundary.instance.render()]);
+}
+
+/** Redraw one component whose store changed; what it throws goes to the nearest boundary above. */
+function redraw(fiber: Fiber): void {
+  const mark = created.length;
+  try {
+    if (fiber.tag === 'class') renderClass(fiber);
+    else renderFunction(fiber);
+  } catch (error) {
+    for (const lost of created.splice(mark)) lost.alive = false;
+    let boundary = fiber.parent;
+    while (boundary && !isBoundary(boundary)) boundary = boundary.parent;
+    if (!boundary) throw error;
+    showFallback(boundary, error);
+  }
+}
+
+function storeChanged(fiber: Fiber, hook: StoreHook): void {
+  if (!fiber.alive || Object.is(hook.getSnapshot(), hook.value)) return;
+  dirty.add(fiber);
+  if (!rendering) flush();
+}
+
+function commit(): void {
+  created = [];
+  for (const [fiber, hook] of pendingSubscriptions.splice(0)) {
+    if (!fiber.alive || hook.unsubscribe) continue;
+    hook.unsubscribe = hook.subscribe(() => storeChanged(fiber, hook));
+    // The store may have changed between the render and the subscription.
+    storeChanged(fiber, hook);
+  }
+}
+
+function run(work: () => void): void {
+  rendering += 1;
+  try {
+    work();
+  } finally {
+    rendering -= 1;
+  }
+  if (!rendering) {
+    commit();
+    flush();
+  }
+}
+
+let flushing = false;
+function flush(): void {
+  if (flushing) return;
+  flushing = true;
+  try {
+    for (const fiber of dirty) {
+      dirty.delete(fiber);
+      if (fiber.alive) run(() => redraw(fiber));
+    }
+  } finally {
+    flushing = false;
+  }
+}
+
+function useSyncExternalStore(
+  subscribe: StoreHook['subscribe'],
+  getSnapshot: StoreHook['getSnapshot'],
+): unknown {
+  const fiber = currentFiber;
+  if (!fiber) return getSnapshot();
+  const index = hookIndex++;
+  let hook = fiber.stores[index];
+  if (!hook || hook.subscribe !== subscribe) {
+    hook?.unsubscribe?.();
+    hook = { subscribe, getSnapshot, value: undefined };
+    fiber.stores[index] = hook;
+    pendingSubscriptions.push([fiber, hook]);
+  }
+  hook.getSnapshot = getSnapshot;
+  hook.value = getSnapshot();
+  return hook.value;
+}
+
+// As in React 19, a context is its own provider.
+function createContext(defaultValue: unknown) {
+  const context: any = { $$typeof: CONTEXT, defaultValue };
+  context.Provider = context;
+  return context;
+}
+
+function useContext(context: any): unknown {
+  for (let fiber = currentFiber; fiber; fiber = fiber.parent) {
+    if (fiber.tag === 'provider' && fiber.kind === context) return fiber.props.value;
+  }
+  return context.defaultValue;
+}
+
+const output = (fiber: Fiber): Array<HostNode | string> => {
+  if (fiber.tag === 'text') return [String(fiber.node)];
+  if (fiber.tag === 'host')
+    return [
+      { tag: fiber.kind as string, props: fiber.props, children: fiber.children.flatMap(output) },
+    ];
+  return fiber.children.flatMap(output);
+};
+
+export interface Mounted {
+  /** What is on screen now. */
+  nodes(): Array<HostNode | string>;
+  /** Redraw the top component, as when its own state changes, and return what is on screen. */
+  update(): Array<HostNode | string>;
+  unmount(): void;
+}
+
+/** Keep an element tree on screen, so later store changes redraw it the way React would. */
+export function mount(node: any): Mounted {
+  const root: Fiber = {
+    tag: 'root',
+    node: null,
+    key: null,
+    kind: null,
+    stores: [],
+    children: [],
+    parent: null,
+    alive: true,
+  };
+  run(() => {
+    root.children = [build(root, undefined, node)];
+  });
+  const mounted: Mounted = {
+    nodes: () => root.children.flatMap(output),
+    update() {
+      run(() => {
+        root.children = [build(root, root.children[0], node, true)];
+      });
+      return mounted.nodes();
+    },
+    unmount() {
+      root.children.forEach(kill);
+      root.children = [];
+    },
+  };
+  return mounted;
+}
+
+/** Render an element tree once and return its host nodes. */
+export function render(node: any): Array<HostNode | string> {
+  const mounted = mount(node);
+  const nodes = mounted.nodes();
+  mounted.unmount();
+  return nodes;
+}
+
+export const React = {
+  createElement,
+  cloneElement,
+  isValidElement,
+  Fragment: FRAGMENT,
+  Component,
+  memo: (type: any) => ({ $$typeof: MEMO, type, compare: null }),
+  forwardRef: (render: any) => ({ $$typeof: FORWARD_REF, render }),
+  createContext,
+  useContext,
+  useSyncExternalStore,
+  useId: () => ':r0:',
+  version: '19.1.1',
+};
+const h = createElement;
 
 export function textOf(nodes: Array<HostNode | string>): string {
   return nodes.map((node) => (typeof node === 'string' ? node : textOf(node.children))).join('');
@@ -155,7 +467,7 @@ export interface FakeSteamOptions {
 export function createSteam(options: FakeSteamOptions = {}) {
   const messages: any[] = [];
   const consoleErrors: unknown[][] = [];
-  const createdMenus: Array<{ element: any; target: unknown }> = [];
+  const createdMenus: Array<{ element: any; target: any; window: unknown }> = [];
   const calls = { openPowerMenu: 0 };
 
   // Menus -------------------------------------------------------------------------------------
@@ -221,8 +533,10 @@ export function createSteam(options: FakeSteamOptions = {}) {
   );
 
   class CContextMenuManager {
-    CreateContextMenuInstance(element: any, target: unknown) {
-      createdMenus.push({ element, target });
+    CreateContextMenuInstance(element: any, target: any) {
+      // Steam shows a menu in the window of the element it is opened on, and in the main Big
+      // Picture window (Steam's shared context) for anything else.
+      createdMenus.push({ element, target, window: target?.ownerDocument?.defaultView || window });
       return { Show: noop, Hide: noop };
     }
   }
@@ -323,6 +637,10 @@ export function createSteam(options: FakeSteamOptions = {}) {
     ),
   );
 
+  // The Steam window everything below it is drawn for. In a game that is the game's overlay, also
+  // for the Quick Access Menu drawn over it.
+  const WindowContext = React.createContext(null);
+
   // Webpack registry --------------------------------------------------------------------------
   // Decoys first, so the lookups have to skip near misses and a module that throws when required.
   const modules: Array<[string, string, () => unknown]> = [
@@ -371,6 +689,11 @@ export function createSteam(options: FakeSteamOptions = {}) {
       () => ({ hB: HeaderBar }),
     ],
     [
+      '29827',
+      '(xe,$,t)=>{"use strict";t.d($,{$2:()=>n,ER:()=>i,mA:()=>s});var e=t(62540),a=t(63696),r=t(91974);const s=a.createContext(null);function i(l){return(0,e.jsx)(s.Provider,{value:l.instance,children:(0,e.jsx)(r.F6,{factory:l.instance.VirtualKeyboardManager,children:l.children})})}const n=()=>a.useContext(s)}',
+      () => ({ $2: () => React.useContext(WindowContext), ER: noop, mA: WindowContext }),
+    ],
+    [
       '79100',
       'function(e,t,n){n.d(t,{d4:()=>Te});(0,We.we)("#StopStreamingTo",Se.clientName);isPowerChord:kt}',
       () => ({ d4: noop }),
@@ -400,9 +723,9 @@ export function createSteam(options: FakeSteamOptions = {}) {
     webpackChunksteamui: { push: (chunk: any[]) => chunk[2]?.(require) },
     __vibeshineBridge: (json: string) => messages.push(JSON.parse(json)),
     SteamUIStore: {
-      OpenPowerMenu() {
+      OpenPowerMenu(target: unknown) {
         calls.openPowerMenu += 1;
-        showContextMenu(h(PowerMenu, { onCancel: noop, isPowerChord: false }), window);
+        showContextMenu(h(PowerMenu, { onCancel: noop, isPowerChord: false }), target);
       },
     },
     console: { log: noop, error: (...args: unknown[]) => consoleErrors.push(args) },
@@ -451,8 +774,14 @@ export function createSteam(options: FakeSteamOptions = {}) {
       window.SteamUIStore.OpenPowerMenu();
       return render(createdMenus.at(-1)!.element);
     },
-    renderHeader() {
-      return render(h(HeaderBar, { quickAccessHeader: false }));
+    /** Draw the header, for the given Steam window when there is one. */
+    renderHeader(steamWindow?: unknown) {
+      const header = h(HeaderBar, { quickAccessHeader: false });
+      return render(steamWindow ? h(WindowContext, { value: steamWindow }, header) : header);
+    },
+    /** Keep the header on screen, as Big Picture does while it is open. */
+    mountHeader() {
+      return mount(h(HeaderBar, { quickAccessHeader: false }));
     },
   };
 }
